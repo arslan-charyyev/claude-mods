@@ -4,7 +4,7 @@ My private Claude Code mods. Each folder is one mod: a plugin with function hook
 
 | Mod | What it does |
 | --- | --- |
-| [`turkish-practice`](turkish-practice/) | Turkish flashcards from my daily lessons, in a band above the prompt and a `/tr` pane of the Desktop Code tab |
+| [`turkish-practice`](turkish-practice/) | Turkish flashcards with spaced repetition from my daily lessons, in a band above the prompt and a `/tr` pane of the Desktop Code tab |
 
 ## Load a mod
 

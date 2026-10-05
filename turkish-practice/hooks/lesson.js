@@ -132,10 +132,14 @@ export function grade(answer, expected) {
   const given = new Set(a.split(' '))
   const givenFolded = new Set(a.split(' ').map(fold))
   const shown = displayWords(expected)
+  const raw = expected.trim().split(/\s+/)
   const keys = x.split(' ')
-  // Show each word as written ("Oda", not "oda") when the two splits agree
+  // Show each word as written ("Oda", not "oda") when the splits agree;
+  // `raw` also keeps the punctuation, to draw the sentence itself
+  const isAligned = shown.length === keys.length && raw.length === keys.length
   const words = keys.map((key, i) => ({
-    word: shown.length === keys.length ? shown[i] : key,
+    word: isAligned ? shown[i] : key,
+    raw: isAligned ? raw[i] : key,
     status: given.has(key) ? 'ok' : givenFolded.has(fold(key)) ? 'letters' : 'missing',
   }))
   const verdict = a === x ? 'exact' : fold(a) === fold(x) ? 'letters' : 'different'
