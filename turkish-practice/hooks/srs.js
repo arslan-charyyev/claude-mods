@@ -6,12 +6,15 @@
 // stage (translate) it moves to a longer interval instead. A wrong answer moves
 // it one stage back and brings it back soon.
 //
-//   word:     intro -> recognize -> (cloze) -> produce
-//   sentence:          recognize -> (cloze) -> produce
+//   word:     intro -> (recognize) -> (cloze) -> produce
+//   sentence:                         (cloze) -> produce
 //
-// recognize: pick the meaning of the Turkish (A-D)
-// cloze:     pick the missing form (A-D), only when the item has a cloze
+// recognize: pick the meaning of a word (A-D), only when it has wrong options
+// cloze:     pick the missing word (A-D), only when the item has a cloze
 // produce:   type the Turkish for the English
+//
+// A sentence gets no meaning card: with whole sentences as options, the
+// answer shows at a glance. Its choice card is the cloze, one word per option.
 
 import { normalize } from './lesson.js'
 
@@ -30,33 +33,29 @@ export function itemId(kind, tr) {
   return (kind === 'word' ? 'w:' : 's:') + normalize(tr)
 }
 
+const ALL_STAGES = ['intro', 'recognize', 'cloze', 'produce']
+
 export function stagesOf(item) {
-  return [...(item.kind === 'word' ? ['intro'] : []), 'recognize', ...(item.cloze ? ['cloze'] : []), 'produce']
+  return [
+    ...(item.kind === 'word' ? ['intro'] : []),
+    ...(item.kind === 'word' && item.distractors.length > 0 ? ['recognize'] : []),
+    ...(item.cloze ? ['cloze'] : []),
+    'produce',
+  ]
 }
 
-// A small seeded generator, so an item gets the same distractors every time
-function seeded(text) {
-  let h = 2166136261
-  for (const c of text) h = Math.imul(h ^ c.codePointAt(0), 16777619)
-  return () => {
-    h = Math.imul(h ^ (h >>> 15), 2246822507)
-    h = Math.imul(h ^ (h >>> 13), 3266489909)
-    return ((h ^= h >>> 16) >>> 0) / 4294967296
-  }
+// The stage an item shows when its saved stage is not one of its own (a
+// sentence saved at the meaning card that this item no longer has): the next one it has
+export function stageFor(item, stage) {
+  const stages = stagesOf(item)
+  const at = ALL_STAGES.indexOf(stage)
+  return stages.find((x) => ALL_STAGES.indexOf(x) >= at) ?? stages[stages.length - 1]
 }
 
-export function seededShuffle(list, seed) {
-  const random = seeded(seed)
-  const out = [...list]
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1))
-    ;[out[i], out[j]] = [out[j], out[i]]
-  }
-  return out
-}
-
-// Sentence items from parsed lessons. Their wrong options are the meanings of
-// other sentences, taken first from the same lesson, which tests the same grammar.
+// Sentence items from parsed lessons. Two sentences that differ in one word
+// (the contrast pair is one) give each other a cloze: that word, with the
+// other sentence's word as the wrong option, and the English as the hint.
+// Misspellings of the answer fill the options up to four.
 export function itemsFromLessons(lessons) {
   const raw = []
   for (const l of lessons) {
@@ -71,12 +70,69 @@ export function itemsFromLessons(lessons) {
     if (!byId.has(id)) byId.set(id, { ...it, id })
   }
   const all = [...byId.values()]
+  // Every word of the lessons: a misspelling that is a real word is never an option
+  const vocab = new Set(all.flatMap((it) => normalize(it.tr).split(' ')))
   for (const it of all) {
-    const sameLesson = all.filter((o) => o.id !== it.id && o.date === it.date && o.en !== it.en).map((o) => o.en)
-    const others = all.filter((o) => o.id !== it.id && o.date !== it.date && o.en !== it.en).map((o) => o.en)
-    it.distractors = [...seededShuffle(sameLesson, it.id), ...seededShuffle(others, it.id)].slice(0, 3)
+    it.distractors = []
+    const cloze = pairCloze(it, all, vocab)
+    if (cloze) it.cloze = cloze
   }
   return all
+}
+
+const EDGE = /^([^\p{L}]*)(.*?)([^\p{L}]*)$/u
+
+// The cloze from the sentences that differ from `it` in one word only, at the
+// place where most of them differ
+function pairCloze(it, all, vocab) {
+  const words = it.tr.split(/\s+/)
+  const byPlace = new Map()
+  for (const o of all) {
+    if (o.id === it.id || o.en === it.en) continue
+    const other = o.tr.split(/\s+/)
+    if (other.length !== words.length) continue
+    const diff = words.flatMap((w, i) => (normalize(w) === normalize(other[i]) ? [] : [i]))
+    if (diff.length !== 1) continue
+    const option = other[diff[0]].match(EDGE)[2]
+    if (!option) continue
+    byPlace.set(diff[0], [...(byPlace.get(diff[0]) ?? []), option])
+  }
+  if (byPlace.size === 0) return undefined
+  const [place, wrong] = [...byPlace.entries()].sort((a, b) => b[1].length - a[1].length || a[0] - b[0])[0]
+  const [, before, answer, after] = words[place].match(EDGE)
+  const options = [...new Set([answer, ...wrong])].slice(0, 4)
+  if (options.length < 2) return undefined
+  const taken = (w) => vocab.has(normalize(w)) || options.some((o) => normalize(o) === normalize(w))
+  options.push(...misspellings(answer, taken).slice(0, 4 - options.length))
+  const text = words.map((w, i) => (i === place ? before + '___' + after : w)).join(' ')
+  return { text, hint: it.en, options, answer }
+}
+
+// A vowel that breaks the vowel harmony, and a Turkish letter without its dots
+// or its cedilla (or with them where none belong)
+const HARMONY_SWAPS = { e: 'a', a: 'e' }
+const LETTER_SWAPS = { ı: 'i', i: 'ı', ş: 's', s: 'ş', ç: 'c', c: 'ç', ğ: 'g', g: 'ğ', ö: 'o', o: 'ö', ü: 'u', u: 'ü' }
+
+// Misspellings of a word, one letter off each, for the wrong options of a cloze.
+// The end of a word carries the suffixes, so the changes start there; the first
+// letter stays. One of each kind comes first, then the rest. `taken` rules out
+// a real word and an option the cloze already has.
+export function misspellings(word, taken) {
+  const letters = Array.from(word)
+  const variants = (swaps) => {
+    const out = []
+    for (let i = letters.length - 1; i > 0; i--) {
+      const swap = swaps[letters[i]]
+      if (!swap) continue
+      const v = [...letters.slice(0, i), swap, ...letters.slice(i + 1)].join('')
+      if (!taken(v) && !out.includes(v)) out.push(v)
+    }
+    return out
+  }
+  const harmony = variants(HARMONY_SWAPS)
+  const letter = variants(LETTER_SWAPS)
+  const first = [harmony[0], letter[0]].filter(Boolean)
+  return [...new Set([...first, ...harmony.slice(1), ...letter.slice(1)])]
 }
 
 // Items from the daily cards files (cards/<date>.json), which the lesson job
@@ -117,13 +173,13 @@ function validCloze(c) {
   )
 }
 
-// A cards item replaces a lesson item with the same Turkish, and a lesson item
-// without enough wrong options borrows them from its own lesson's pool
+// A cards item replaces a lesson item with the same Turkish, and keeps the
+// lesson's cloze when it has none of its own
 export function mergeItems(lessonItems, cardItems) {
   const byId = new Map(lessonItems.map((it) => [it.id, it]))
   for (const c of cardItems) {
     const old = byId.get(c.id)
-    byId.set(c.id, old && c.distractors.length < 3 ? { ...c, distractors: [...c.distractors, ...old.distractors].slice(0, 3) } : c)
+    byId.set(c.id, old && old.cloze && !c.cloze ? { ...c, cloze: old.cloze } : c)
   }
   return [...byId.values()]
 }
@@ -131,21 +187,24 @@ export function mergeItems(lessonItems, cardItems) {
 // The card to show now: the item that has been due longest, then a new item
 // while today's budget lasts (newest day first; within a day, the cards file's
 // order, then the lesson's).
-// `newAllowed` limits new items to the recent lessons.
-export function pickCard(items, state, now, newToday, newAllowed = () => true) {
-  const due = items.filter((it) => state[it.id] && state[it.id].due <= now).sort((a, b) => state[a.id].due - state[b.id].due)
+// `newAllowed` limits new items to the recent lessons, and `fits(item, stage)`
+// limits the card types (the band shows no typed cards).
+export function pickCard(items, state, now, newToday, newAllowed = () => true, fits = () => true) {
+  const due = items
+    .filter((it) => state[it.id] && state[it.id].due <= now && fits(it, state[it.id].stage))
+    .sort((a, b) => state[a.id].due - state[b.id].due)
   if (due.length > 0) return { item: due[0], stage: state[due[0].id].stage, isNew: false }
   if (newToday >= NEW_PER_DAY) return null
   const fresh = items
-    .filter((it) => !state[it.id] && newAllowed(it))
+    .filter((it) => !state[it.id] && newAllowed(it) && fits(it, stagesOf(it)[0]))
     .sort((a, b) => (a.date === b.date ? a.order - b.order : a.date < b.date ? 1 : -1))
   if (fresh.length === 0) return null
   return { item: fresh[0], stage: stagesOf(fresh[0])[0], isNew: true }
 }
 
 // The next item to come due, for "Practice more" and the "next review" line
-export function nextDue(items, state) {
-  return items.filter((it) => state[it.id]).sort((a, b) => state[a.id].due - state[b.id].due)[0] ?? null
+export function nextDue(items, state, fits = () => true) {
+  return items.filter((it) => state[it.id] && fits(it, state[it.id].stage)).sort((a, b) => state[a.id].due - state[b.id].due)[0] ?? null
 }
 
 // The new state of an item after one answer at one stage

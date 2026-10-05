@@ -6,8 +6,8 @@ It draws in the Desktop app only. In a terminal session it loads, but it draws n
 
 ## What it shows
 
-- **The band above the prompt** shows the card that is due. An answered card makes room for the next one when Claude's next answer ends, or at once on **→ Next**. An unanswered card stays, so no card goes by unseen. `⏭` skips a card for this session, and `⤢` opens the pane.
-- **`/tr`** opens a pane to study card after card, with today's progress ring and counts. `/tr lesson` opens today's lesson, with the answers hidden until a press.
+- **The band above the prompt** shows the card that is due, but only a card that takes one press: a new word, or an A to D choice. A translate card needs typing, so it waits for the pane, and the band shows how many wait. An answered card makes room for the next one when Claude's next answer ends, or at once on **→ Next**. An unanswered card stays, so no card goes by unseen. **⏭ Skip** skips a card for this session, **▾ Hide** folds the band to one line with the card type, **▴ Show** unfolds it, and **⤢ Open** opens the pane. The band stays folded or unfolded across sessions until the next press.
+- **`/tr`** opens a pane with two tabs. **Practice** shows card after card, translate cards included, with today's progress ring and counts. When the pane closes, a translate card with no answer goes back to wait. **Lesson** shows today's lesson, with the answers hidden until a press, and `/tr lesson` opens the pane at that tab.
 
 ## The cards
 
@@ -16,9 +16,11 @@ Each item (a word or a sentence) moves through card types from easy to hard:
 | Card | What I do | Items |
 | --- | --- | --- |
 | New word | Read the word, its meaning, and an example | words |
-| What does it mean? | Pick the English meaning, A to D | all |
-| Fill the gap | Pick the missing form, A to D | items with a cloze |
+| What does it mean? | Pick the English meaning, A to D | words with wrong options |
+| Fill the gap | Pick the missing word, A to D. The options look alike, or only the context tells them apart | items with a cloze |
 | Translate into Turkish | Type the Turkish sentence | all |
+
+A sentence gets no "What does it mean?" card, because with whole sentences as options the answer shows at a glance. Its choice card is "Fill the gap", with one word per option. A sentence from a cards file brings its own cloze. Two lesson sentences that differ in one word, such as the contrast pair `gelmem` / `gelemem`, give each other a cloze: the English is the hint, and the other word is a wrong option. Misspellings of the right word fill the options up to four, as a spelling check: one breaks the vowel harmony (`gelmam`), one has a Turkish letter without its dots or cedilla (`icmem`). A misspelling that is a real word in the lessons is never an option. A lesson sentence without such a partner goes straight to the translate card.
 
 A right answer moves the item to the next card type, which comes back 10 minutes later. At the translate card, a right answer moves it to the next interval instead: 1, 3, 7, 21, then 60 days. A wrong answer moves it one card type back and brings it back in 3 minutes. Translate answers are graded word by word: missing Turkish letters (`karanlik` for `karanlık`) still count as right, and a different sentence asks me whether mine is right too, because Turkish word order is free.
 

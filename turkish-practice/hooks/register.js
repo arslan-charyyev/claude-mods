@@ -1,12 +1,13 @@
 // turkish-practice: Turkish flashcards with spaced repetition, for the Desktop Code tab.
 // - The band above the prompt shows the card that is due; an answered card
-//   moves on when Claude's next answer ends, or on Next
-// - /tr opens a pane to study card after card, and today's lesson
+//   moves on when Claude's next answer ends, or on Next. It shows only the
+//   cards answered with one press: a typed card waits for the pane
+// - /tr opens a pane to practice card after card, and today's lesson
 // The learning data lives in ~/.claude/turkish: the lessons and cards the daily
 // lesson job writes, and the practice log and state this mod writes back.
 import { parseLesson, lessonBody, grade, localDate, shuffle } from './lesson.js'
 import { progressRing } from './svg.js'
-import { itemsFromLessons, itemsFromCards, mergeItems, pickCard, nextDue, answer, summary, itemId, NEW_PER_DAY, DAY } from './srs.js'
+import { itemsFromLessons, itemsFromCards, mergeItems, pickCard, nextDue, answer, summary, itemId, stageFor, NEW_PER_DAY, DAY } from './srs.js'
 
 const PANE = 'turkish-drill'
 // New items come only from the lessons and cards of this many recent days
@@ -30,8 +31,12 @@ const skipped = new Set()
 // The card on show, shared by the band and the pane:
 // { item, stage, isNew, options?, result? }
 let card = null
-let tab = 'study'
+let tab = 'practice'
 let isAnswersShown = false
+// While the pane is closed, the band picks the cards: no typed cards then
+let isPaneOpen = false
+// The band folded to one line; every session shares the choice
+let isBandCollapsed = false
 
 async function load($) {
   const home = await $.env.get('HOME')
@@ -78,6 +83,7 @@ async function load($) {
     await $.store.set('missed', [])
   }
 
+  isBandCollapsed = (await $.store.get('bandCollapsed')) === true
   const daily = await $.store.get('daily')
   newToday = daily && daily.day === today ? daily.newCount : 0
   const log = await $.store.get('log')
@@ -97,6 +103,13 @@ function statsFor(log, day) {
   return { right: todays.filter((x) => x.isRight).length, wrong: todays.filter((x) => !x.isRight).length }
 }
 
+// The cards the band can show: the ones answered with one press
+function fitsBand(item, stage) {
+  return stageFor(item, stage) !== 'produce'
+}
+
+const fits = () => (isPaneOpen ? undefined : fitsBand)
+
 // Show a card: the options of a choice card are shuffled once, when it is shown
 function show(pick) {
   if (!pick) {
@@ -104,9 +117,7 @@ function show(pick) {
     return
   }
   const { item } = pick
-  let stage = pick.stage
-  // A sentence without any wrong option cannot be a choice card
-  if (stage === 'recognize' && item.distractors.length === 0) stage = 'produce'
+  const stage = stageFor(item, pick.stage)
   const options =
     stage === 'recognize' ? shuffle([item.en, ...item.distractors]) : stage === 'cloze' ? shuffle(item.cloze.options) : undefined
   card = { item, stage, isNew: pick.isNew, options }
@@ -114,12 +125,12 @@ function show(pick) {
 
 function pickNext(now) {
   const open = items.filter((it) => !skipped.has(it.id))
-  show(pickCard(open, srs, now, newToday, (it) => recentDates.has(it.date)))
+  show(pickCard(open, srs, now, newToday, (it) => recentDates.has(it.date), fits()))
 }
 
 // Practice ahead: the item that comes due next, at its own stage
 function practiceMore() {
-  const it = nextDue(items.filter((x) => !skipped.has(x.id)), srs)
+  const it = nextDue(items.filter((x) => !skipped.has(x.id)), srs, fits())
   if (it) show({ item: it, stage: srs[it.id].stage, isNew: false })
 }
 
@@ -148,7 +159,7 @@ async function record($, c, isRight, given, verdict) {
     card: c.stage,
     lesson: c.item.date,
     en: c.item.en,
-    expected: c.stage === 'cloze' ? c.item.cloze.answer : c.stage === 'recognize' ? c.item.en : c.item.tr,
+    expected: c.stage === 'cloze' ? wholeWordGap(c.item.cloze).word(c.item.cloze.answer) : c.stage === 'recognize' ? c.item.en : c.item.tr,
     answer: given,
     verdict,
     ...(c.stage === 'intro' ? {} : { isRight }),
@@ -168,6 +179,17 @@ async function record($, c, isRight, given, verdict) {
 
 async function openPane($) {
   await $.ui.open({ id: PANE, title: 'Türkçe', focus: true, closeOnEscape: true })
+}
+
+// The pane has time for typed cards: once it is up, they come back into the picks,
+// and a card with no answer yet makes room for the item that has been due longest
+async function paneShown($) {
+  if (isPaneOpen) return
+  isPaneOpen = true
+  if (!card || !card.result) {
+    pickNext(await $.clock.now())
+    $.ui.invalidate('ui.render')
+  }
 }
 
 function untilText(ms) {
@@ -191,6 +213,13 @@ const HEADLINES = {
 
 const LABELS = { intro: 'New word', recognize: 'What does it mean?', cloze: 'Fill the gap', produce: 'Translate into Turkish' }
 
+// A cloze gap drawn as a whole word: a cards file may cut the gap inside a word
+// ("iç___." with the option "emem"), but each option shows as the whole word ("içemem")
+function wholeWordGap(z) {
+  const m = z.text.match(/([\p{L}'’]*)___([\p{L}'’]*)/u)
+  return { text: z.text.replace(m[0], '＿＿＿'), word: (option) => m[1] + option + m[2] }
+}
+
 // The card itself, for the band (compact) and the pane (large).
 // Every control calls back into the module, so both drawings stay in step.
 function cardView($, el, isLarge) {
@@ -199,6 +228,9 @@ function cardView($, el, isLarge) {
   const c = card
   const it = c.item
   const r = c.result
+  const gap = c.stage === 'cloze' ? wholeWordGap(it.cloze) : null
+  // The band's label line carries the flag already; the pane's does not
+  const flag = isLarge ? '🇹🇷 ' : ''
   const heading = (text) => (isLarge ? Markdown({ key: 'tr-prompt', text: '### ' + text }) : Text({ bold: true, wrap: 'wrap', children: [text] }))
   const row = (children) => Box({ flexDirection: 'row', columnGap: 1, children })
   const next = () =>
@@ -215,8 +247,8 @@ function cardView($, el, isLarge) {
   const note = () => (it.note ? [Markdown({ key: 'tr-note', text: it.note })] : [])
   const verdictLine = (isRight, text) => Text({ bold: true, color: isRight ? RIGHT : WRONG, wrap: 'wrap', children: [text] })
 
-  // The options of a choice card, A to D
-  const choices = (correct, onChoose) =>
+  // The options of a choice card, A to D; `shown` turns an option into its label
+  const choices = (correct, onChoose, shown = (option) => option) =>
     Box({
       flexDirection: isLarge ? 'column' : 'row',
       flexWrap: 'wrap',
@@ -225,7 +257,7 @@ function cardView($, el, isLarge) {
       children: c.options.map((option, i) =>
         Button({
           key: 'tr-option-' + i,
-          label: LETTERS[i] + '. ' + option,
+          label: LETTERS[i] + '. ' + shown(option),
           variant: 'secondary',
           onPress: async () => {
             const isRight = option === correct
@@ -239,7 +271,7 @@ function cardView($, el, isLarge) {
 
   if (c.stage === 'intro') {
     return [
-      heading('🇹🇷 ' + it.tr + ' — ' + it.en),
+      heading(flag + it.tr + ' — ' + it.en),
       ...(it.example ? [Text({ wrap: 'wrap', children: [it.example.tr] }), Text({ italic: true, dimColor: true, wrap: 'wrap', children: [it.example.en] })] : []),
       ...note(),
       row([
@@ -260,9 +292,9 @@ function cardView($, el, isLarge) {
   }
 
   if (c.stage === 'recognize') {
-    if (!r) return [heading('🇹🇷 ' + it.tr), choices(it.en, (option, isRight) => record($, c, isRight, option, isRight ? 'right' : 'wrong'))]
+    if (!r) return [heading(flag + it.tr), choices(it.en, (option, isRight) => record($, c, isRight, option, isRight ? 'right' : 'wrong'))]
     return [
-      heading('🇹🇷 ' + it.tr),
+      heading(flag + it.tr),
       verdictLine(r.isRight, r.isRight ? '✓ Doğru! ' + it.en : '✗ It means: ' + it.en),
       ...note(),
       row([next()]),
@@ -273,9 +305,9 @@ function cardView($, el, isLarge) {
     const z = it.cloze
     const prompt = [
       ...(z.hint ? [Text({ italic: true, dimColor: true, wrap: 'wrap', children: [z.hint] })] : []),
-      heading(z.text.replace('___', ' ＿＿＿ ')),
+      heading(gap.text),
     ]
-    if (!r) return [...prompt, choices(z.answer, (option, isRight) => record($, c, isRight, option, isRight ? 'right' : 'wrong'))]
+    if (!r) return [...prompt, choices(z.answer, (option, isRight) => record($, c, isRight, gap.word(option), isRight ? 'right' : 'wrong'), gap.word)]
     return [
       ...prompt,
       verdictLine(r.isRight, (r.isRight ? '✓ Doğru! ' : '✗ ') + z.text.replace('___', z.answer)),
@@ -385,10 +417,23 @@ export function register(on) {
 
   on('command.run', { command: 'tr' }, async ($, e) => {
     await ensureFresh($)
-    tab = e.args.trim() === 'lesson' ? 'lesson' : 'study'
+    tab = e.args.trim() === 'lesson' ? 'lesson' : 'practice'
     await openPane($)
+    await paneShown($)
     $.ui.invalidate('ui.render')
     return {}
+  })
+
+  // A typed card with no answer yet goes back to wait when the pane closes
+  on('ui.close', async ($, e, next) => {
+    const result = await next(e)
+    if (e.id !== PANE) return result
+    isPaneOpen = false
+    if (card && !fitsBand(card.item, card.stage) && !(card.result && card.result.isPending)) {
+      pickNext(await $.clock.now())
+      $.ui.invalidate('ui.render')
+    }
+    return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -398,25 +443,41 @@ export function register(on) {
     const { Box, Text, Button } = el
     const redraw = () => $.ui.invalidate('ui.render')
     const now = await $.clock.now()
-    // Icon buttons: one glyph is a control by itself
-    const icon = (key, glyph, onPress) => Button({ key, label: glyph, plain: true, dimColor: true, onPress })
-    const openIcon = icon('tr-open', '⤢', async () => {
-      tab = 'study'
+    // Small text buttons: a glyph and a word, as no Button has a tooltip
+    const icon = (key, label, onPress) => Button({ key, label, plain: true, dimColor: true, onPress })
+    const openIcon = icon('tr-open', '⤢ Open', async () => {
+      tab = 'practice'
       await openPane($)
+      await paneShown($)
       redraw()
     })
+    const setCollapsed = async (value) => {
+      isBandCollapsed = value
+      redraw()
+      await $.store.set('bandCollapsed', value)
+    }
+    // Typed cards that are due: they wait for the pane
+    const typedDue = items.filter((it) => srs[it.id] && srs[it.id].due <= now && !fitsBand(it, srs[it.id].stage)).length
 
     let band
-    if (!card) {
-      const soon = nextDue(items, srs)
+    if (!card || !fitsBand(card.item, card.stage)) {
+      // A typed card is on show only while the pane is up: the band points there
+      const soon = nextDue(items, srs, fitsBand)
+      const status = card
+        ? 'A translate card is open in the pane'
+        : typedDue > 0
+          ? typedDue + (typedDue === 1 ? ' translate card waits' : ' translate cards wait') + ' for the pane'
+          : soon
+            ? 'Next review ' + untilText(srs[soon.id].due - now)
+            : 'No cards yet'
       band = Box({
         flexDirection: 'row',
         alignItems: 'center',
         columnGap: 2,
         children: [
-          Text({ bold: true, children: ['🇹🇷 All caught up'] }),
-          Box({ flexGrow: 1, children: [Text({ dimColor: true, children: [soon ? 'Next review ' + untilText(srs[soon.id].due - now) : 'No cards yet'] })] }),
-          ...(soon
+          Text({ bold: true, children: [card ? '🇹🇷 Translate into Turkish' : '🇹🇷 All caught up'] }),
+          Box({ flexGrow: 1, children: [Text({ dimColor: true, children: [status] })] }),
+          ...(soon && !card
             ? [
                 Button({
                   key: 'tr-more',
@@ -429,6 +490,17 @@ export function register(on) {
                 }),
               ]
             : []),
+          openIcon,
+        ],
+      })
+    } else if (isBandCollapsed) {
+      band = Box({
+        flexDirection: 'row',
+        alignItems: 'center',
+        columnGap: 2,
+        children: [
+          Box({ flexGrow: 1, children: [Text({ dimColor: true, children: ['🇹🇷 ' + LABELS[card.stage] + (card.isNew ? ' · new' : '')] })] }),
+          icon('tr-expand', '▴ Show', () => setCollapsed(false)),
           openIcon,
         ],
       })
@@ -449,12 +521,13 @@ export function register(on) {
                   ...(card.result
                     ? []
                     : [
-                        icon('tr-skip', '⏭', async () => {
+                        icon('tr-skip', '⏭ Skip', async () => {
                           skipped.add(card.item.id)
                           pickNext(await $.clock.now())
                           redraw()
                         }),
                       ]),
+                  icon('tr-collapse', '▾ Hide', () => setCollapsed(true)),
                   openIcon,
                 ],
               }),
@@ -469,6 +542,8 @@ export function register(on) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE || e.surface !== 'desktop') return next(e)
+    // A pane that is up without /tr (a reload, a restore) counts as open too
+    await paneShown($)
     const el = $.ui.resolve(e)
     const { Box, Text, Button, Markdown, Svg } = el
     const redraw = () => $.ui.invalidate('ui.render')
@@ -490,7 +565,7 @@ export function register(on) {
       alignItems: 'center',
       justifyContent: 'space-between',
       children: [
-        Box({ flexDirection: 'row', columnGap: 1, children: [tabButton('study', 'Study'), tabButton('lesson', 'Lesson')] }),
+        Box({ flexDirection: 'row', columnGap: 1, children: [tabButton('practice', 'Practice'), tabButton('lesson', 'Lesson')] }),
         Box({
           flexDirection: 'row',
           alignItems: 'center',

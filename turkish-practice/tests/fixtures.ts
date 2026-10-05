@@ -85,6 +85,7 @@ export function stubAll(on, { store = {}, cards = CARDS, time = { now: NOW } } =
   on('command.register', () => ({ value: undefined }))
   on('session.start', () => ({ cwd: '/work' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => undefined)
   on('ui.log', () => ({ value: undefined }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
