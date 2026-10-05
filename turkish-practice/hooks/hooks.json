@@ -1,0 +1,4 @@
+{
+  "description": "The turkish-practice hooks module",
+  "modules": ["./register.js"]
+}
