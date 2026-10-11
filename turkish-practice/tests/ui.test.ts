@@ -122,7 +122,7 @@ test('the band shows no typed cards; the pane shows them', async ($, on) => {
 })
 
 test('skip and open are small text buttons; done for the day shows the next review', async ($, on) => {
-  const { time } = stubAll(on, { store: { srs: { [TEA]: { ...due('recognize'), due: NOW + 2 * 3600 * 1000 } }, daily: { day: '2026-10-02', newCount: NEW_PER_DAY } } })
+  stubAll(on, { store: { srs: { [TEA]: { ...due('recognize'), due: NOW + 2 * 3600 * 1000 } }, daily: { day: '2026-10-02', newCount: NEW_PER_DAY } } })
   await start($)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: '🇹🇷 All caught up' })).toBeDefined()
@@ -133,7 +133,6 @@ test('skip and open are small text buttons; done for the day shows the next revi
   expect((await ui.find({ key: 'tr-skip' })).props).toMatchObject({ label: '⏭ Skip', plain: true })
   await ui.press({ key: 'tr-skip' })
   expect(await ui.find({ type: 'Text', text: '🇹🇷 All caught up' })).toBeDefined()
-  time.now = NOW
 })
 
 test('the band folds to one line and back, and remembers it', async ($, on) => {
@@ -157,6 +156,46 @@ test('a folded band stays folded in a new session', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await ui.find({ key: 'tr-expand' })).toBeDefined()
   expect(await ui.find({ key: 'tr-option-0' })).toBeUndefined()
+})
+
+test("another session's answer reaches this session within seconds", async ($, on) => {
+  const { saved, clock } = stubAll(on, { store: { srs: { [TEA]: due('cloze'), 'w:kira': { ...due('recognize'), due: NOW - 500 } } } })
+  await start($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: 'Bu çayı ＿＿＿.' })).toBeDefined()
+  // Another session answers the tea card: it writes the state and a new rev
+  saved.set('srs', { ...(saved.get('srs') as object), [TEA]: { stage: 'produce', box: 0, due: NOW + LEARN_STEP, reps: 2, lapses: 0 } })
+  saved.set('daily', { day: '2026-10-02', newCount: 3 })
+  saved.set('rev', 'other-session')
+  await clock.advance(3000)
+  // This session moves on to the next due card, and counts the other session's new items
+  expect(await ui.find({ type: 'Text', text: 'kira' })).toBeDefined()
+  await $.command.run({ command: 'tr', args: '' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await pane.find({ type: 'Text', text: '1 due · ' + (NEW_PER_DAY - 3) + ' new left' })).toBeDefined()
+})
+
+test('every session shows the options in the same order', async ($, on) => {
+  stubAll(on, { store: { srs: { [TEA]: due('cloze') } } })
+  await start($)
+  const first = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const labels = async (ui) => Promise.all([0, 1, 2, 3].map(async (i) => (await ui.find({ key: 'tr-option-' + i })).props.label))
+  const before = await labels(first)
+  // A fresh load stands for a second session
+  await start($)
+  await first.unmount()
+  expect(await labels(await $.ui.mount({ ...BAND, surface: 'desktop' }))).toEqual(before)
+})
+
+test('a skip holds in every session for the rest of the day', async ($, on) => {
+  const { saved } = stubAll(on, { store: { srs: { [TEA]: due('cloze') } } })
+  await start($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'tr-skip' })
+  expect(saved.get('skipped')).toEqual({ day: '2026-10-02', ids: [TEA] })
+  await ui.unmount()
+  await start($)
+  expect(await (await $.ui.mount({ ...BAND, surface: 'desktop' })).find({ type: 'Text', text: 'Bu çayı ＿＿＿.' })).toBeUndefined()
 })
 
 test('the prototype review list becomes due translate cards', async ($, on) => {

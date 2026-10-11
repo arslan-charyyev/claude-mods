@@ -27,7 +27,7 @@ export const LEARN_STEP = 10 * MINUTE
 // A wrong answer: the item comes back within the same sitting
 export const RETRY_STEP = 3 * MINUTE
 // New items a day
-export const NEW_PER_DAY = 5
+export const NEW_PER_DAY = 20
 
 export function itemId(kind, tr) {
   return (kind === 'word' ? 'w:' : 's:') + normalize(tr)
@@ -106,6 +106,27 @@ function pairCloze(it, all, vocab) {
   options.push(...misspellings(answer, taken).slice(0, 4 - options.length))
   const text = words.map((w, i) => (i === place ? before + '___' + after : w)).join(' ')
   return { text, hint: it.en, options, answer }
+}
+
+// A small seeded generator, so every session shuffles the options the same way
+function seeded(text) {
+  let h = 2166136261
+  for (const c of text) h = Math.imul(h ^ c.codePointAt(0), 16777619)
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507)
+    h = Math.imul(h ^ (h >>> 13), 3266489909)
+    return ((h ^= h >>> 16) >>> 0) / 4294967296
+  }
+}
+
+export function seededShuffle(list, seed) {
+  const random = seeded(seed)
+  const out = [...list]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
 }
 
 // A vowel that breaks the vowel harmony, and a Turkish letter without its dots

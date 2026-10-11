@@ -5,9 +5,9 @@
 // - /tr opens a pane to practice card after card, and today's lesson
 // The learning data lives in ~/.claude/turkish: the lessons and cards the daily
 // lesson job writes, and the practice log and state this mod writes back.
-import { parseLesson, lessonBody, grade, localDate, shuffle } from './lesson.js'
+import { parseLesson, lessonBody, grade, localDate } from './lesson.js'
 import { progressRing } from './svg.js'
-import { itemsFromLessons, itemsFromCards, mergeItems, pickCard, nextDue, answer, summary, itemId, stageFor, NEW_PER_DAY, DAY } from './srs.js'
+import { itemsFromLessons, itemsFromCards, mergeItems, pickCard, nextDue, answer, summary, itemId, stageFor, seededShuffle, NEW_PER_DAY, DAY } from './srs.js'
 
 const PANE = 'turkish-drill'
 // New items come only from the lessons and cards of this many recent days
@@ -20,82 +20,126 @@ const LETTERS = ['A', 'B', 'C', 'D']
 
 let base = ''
 let loadedDate = ''
+let filesStamp = ''
 let todayMd = ''
 let items = []
 let recentDates = new Set()
+
+// The shared state: every session reads it from the store, and a write in one
+// session reaches the others within SYNC_MS. `rev` changes with each write.
 let srs = {}
 let newToday = 0
 let dayStats = { right: 0, wrong: 0 }
-const skipped = new Set()
+let skipped = new Set()
+let isBandCollapsed = false
+let rev = ''
 
 // The card on show, shared by the band and the pane:
-// { item, stage, isNew, options?, result? }
+// { item, stage, isNew, isAhead?, options?, result? }
 let card = null
 let tab = 'practice'
 let isAnswersShown = false
 // While the pane is closed, the band picks the cards: no typed cards then
 let isPaneOpen = false
-// The band folded to one line; every session shares the choice
-let isBandCollapsed = false
 
-async function load($) {
-  const home = await $.env.get('HOME')
-  base = home + '/.claude/turkish'
-  const now = await $.clock.now()
-  const today = localDate(now)
+// How often a session looks for another session's answers, and for new lesson files
+const SYNC_MS = 3000
+const FILES_MS = 60000
 
-  const lessonNames = (await $.fs.list(base + '/lessons'))
-    .filter((x) => x.kind === 'file' && /^\d{4}-\d{2}-\d{2}\.md$/.test(x.name) && x.name.slice(0, 10) <= today)
-    .map((x) => x.name)
-    .sort()
+async function lessonFiles($, today) {
+  const dated = (list, ext) =>
+    list.filter((x) => x.kind === 'file' && new RegExp('^\\d{4}-\\d{2}-\\d{2}\\' + ext + '$').test(x.name) && x.name.slice(0, 10) <= today)
+  const lessons = dated(await $.fs.list(base + '/lessons'), '.md')
+  const cards = (await $.fs.exists(base + '/cards')) ? dated(await $.fs.list(base + '/cards'), '.json') : []
+  const stamp = [...lessons, ...cards].map((x) => x.name + ':' + x.size + ':' + x.mtimeMs).join('|')
+  return { lessons: lessons.map((x) => x.name).sort(), cards: cards.map((x) => x.name), stamp }
+}
+
+// Read the lessons and the cards files again when they changed: the lesson job
+// writes them while sessions run
+async function loadItems($) {
+  const today = localDate(await $.clock.now())
+  const files = await lessonFiles($, today)
+  if (files.stamp === filesStamp && today === loadedDate) return false
+
   const lessons = []
-  for (const name of lessonNames) lessons.push(parseLesson(await $.fs.read(base + '/lessons/' + name), name.slice(0, 10)))
-  todayMd = lessonNames.length > 0 ? await $.fs.read(base + '/lessons/' + lessonNames[lessonNames.length - 1]) : ''
+  for (const name of files.lessons) lessons.push(parseLesson(await $.fs.read(base + '/lessons/' + name), name.slice(0, 10)))
+  todayMd = files.lessons.length > 0 ? await $.fs.read(base + '/lessons/' + files.lessons[files.lessons.length - 1]) : ''
 
   const cardFiles = []
-  if (await $.fs.exists(base + '/cards')) {
-    const cardNames = (await $.fs.list(base + '/cards'))
-      .filter((x) => x.kind === 'file' && /^\d{4}-\d{2}-\d{2}\.json$/.test(x.name) && x.name.slice(0, 10) <= today)
-      .map((x) => x.name)
-    for (const name of cardNames) {
-      try {
-        cardFiles.push({ ...JSON.parse(await $.fs.read(base + '/cards/' + name)), date: name.slice(0, 10) })
-      } catch (error) {
-        $.ui.log('skipped cards/' + name + ': ' + error.message)
-      }
+  for (const name of files.cards) {
+    try {
+      cardFiles.push({ ...JSON.parse(await $.fs.read(base + '/cards/' + name)), date: name.slice(0, 10) })
+    } catch (error) {
+      $.ui.log('skipped cards/' + name + ': ' + error.message)
     }
   }
 
   items = mergeItems(itemsFromLessons(lessons), itemsFromCards(cardFiles))
-  const dates = [...new Set([...lessonNames.map((n) => n.slice(0, 10)), ...cardFiles.map((f) => f.date)])].sort()
+  const dates = [...new Set([...files.lessons.map((n) => n.slice(0, 10)), ...cardFiles.map((f) => f.date)])].sort()
   recentDates = new Set(dates.slice(-NEW_LOOKBACK))
+  filesStamp = files.stamp
+  loadedDate = today
+  return true
+}
 
+// Read the shared state from the store
+async function loadShared($) {
+  const today = localDate(await $.clock.now())
   const saved = await $.store.get('srs')
   srs = saved && typeof saved === 'object' ? saved : {}
-  // The prototype kept missed drill items in a list: they start as due translate cards
-  const missed = await $.store.get('missed')
-  if (Array.isArray(missed) && missed.length > 0) {
-    for (const m of missed) {
-      const id = itemId('sentence', m.tr)
-      if (!srs[id]) srs[id] = { stage: 'produce', box: 0, due: now, reps: 0, lapses: 1 }
-    }
-    await $.store.set('srs', srs)
-    await $.store.set('missed', [])
-  }
-
-  isBandCollapsed = (await $.store.get('bandCollapsed')) === true
   const daily = await $.store.get('daily')
   newToday = daily && daily.day === today ? daily.newCount : 0
   const log = await $.store.get('log')
   dayStats = statsFor(Array.isArray(log) ? log : [], today)
-  loadedDate = today
+  const savedSkips = await $.store.get('skipped')
+  skipped = new Set(savedSkips && savedSkips.day === today && Array.isArray(savedSkips.ids) ? savedSkips.ids : [])
+  isBandCollapsed = (await $.store.get('bandCollapsed')) === true
+  rev = (await $.store.get('rev')) ?? ''
+}
+
+// Mark a write, so the other sessions read the shared state again
+async function bump($) {
+  rev = (await $.clock.now()) + '-' + Math.random().toString(36).slice(2, 8)
+  await $.store.set('rev', rev)
+}
+
+async function load($) {
+  const home = await $.env.get('HOME')
+  base = home + '/.claude/turkish'
+  filesStamp = ''
+  await loadItems($)
+  const now = await $.clock.now()
+
+  // The prototype kept missed drill items in a list: they start as due translate cards
+  const missed = await $.store.get('missed')
+  if (Array.isArray(missed) && missed.length > 0) {
+    const saved = await $.store.get('srs')
+    const all = saved && typeof saved === 'object' ? saved : {}
+    for (const m of missed) {
+      const id = itemId('sentence', m.tr)
+      if (!all[id]) all[id] = { stage: 'produce', box: 0, due: now, reps: 0, lapses: 1 }
+    }
+    await $.store.set('srs', all)
+    await $.store.set('missed', [])
+  }
+
+  await loadShared($)
   card = null
-  skipped.clear()
   pickNext(now)
 }
 
-async function ensureFresh($) {
-  if (localDate(await $.clock.now()) !== loadedDate) await load($)
+// Bring this session in step: new lesson files, a new day, another session's
+// answers. A card with no answer yet is picked again, so every session shows
+// the same one; an answered card stays until Next.
+async function sync($, { files = false } = {}) {
+  const changedFiles = files ? await loadItems($) : false
+  const storeRev = (await $.store.get('rev')) ?? ''
+  if (!changedFiles && storeRev === rev) return
+  await loadShared($)
+  const isKept = card && (card.result || (card.isAhead && !changedFiles))
+  if (!isKept) pickNext(await $.clock.now())
+  $.ui.invalidate('ui.render')
 }
 
 function statsFor(log, day) {
@@ -110,17 +154,25 @@ function fitsBand(item, stage) {
 
 const fits = () => (isPaneOpen ? undefined : fitsBand)
 
-// Show a card: the options of a choice card are shuffled once, when it is shown
-function show(pick) {
+// Show a card. The options of a choice card are shuffled the same way in every
+// session, and anew each time the item comes back.
+function show(pick, isAhead = false) {
   if (!pick) {
     card = null
     return
   }
   const { item } = pick
   const stage = stageFor(item, pick.stage)
+  const seed = item.id + '|' + stage + '|' + (srs[item.id]?.reps ?? 0)
   const options =
-    stage === 'recognize' ? shuffle([item.en, ...item.distractors]) : stage === 'cloze' ? shuffle(item.cloze.options) : undefined
-  card = { item, stage, isNew: pick.isNew, options }
+    stage === 'recognize'
+      ? seededShuffle([item.en, ...item.distractors], seed)
+      : stage === 'cloze'
+        ? seededShuffle(item.cloze.options, seed)
+        : undefined
+  // The same card as before keeps its object, so nothing on screen moves
+  if (card && !card.result && card.item.id === item.id && card.stage === stage) return
+  card = { item, stage, isNew: pick.isNew, isAhead, options }
 }
 
 function pickNext(now) {
@@ -131,7 +183,17 @@ function pickNext(now) {
 // Practice ahead: the item that comes due next, at its own stage
 function practiceMore() {
   const it = nextDue(items.filter((x) => !skipped.has(x.id)), srs, fits())
-  if (it) show({ item: it, stage: srs[it.id].stage, isNew: false })
+  if (it) show({ item: it, stage: srs[it.id].stage, isNew: false }, true)
+}
+
+// Skip an item for the rest of the day, in every session
+async function skipItem($, id) {
+  const today = localDate(await $.clock.now())
+  const saved = await $.store.get('skipped')
+  const ids = saved && saved.day === today && Array.isArray(saved.ids) ? saved.ids : []
+  skipped = new Set([...ids, id])
+  await $.store.set('skipped', { day: today, ids: [...skipped] })
+  await bump($)
 }
 
 // Save one answer: the item's new state, today's new-item count, and the log.
@@ -141,6 +203,8 @@ async function record($, c, isRight, given, verdict) {
   const day = localDate(now)
   const savedSrs = await $.store.get('srs')
   const all = savedSrs && typeof savedSrs === 'object' ? savedSrs : {}
+  // Another session answered this card already: the first answer counts
+  if (c.isNew && all[c.item.id]) c.isNew = false
   all[c.item.id] = answer(c.item, all[c.item.id], c.stage, isRight, now)
   srs = all
   await $.store.set('srs', all)
@@ -168,6 +232,7 @@ async function record($, c, isRight, given, verdict) {
   const log = [...(Array.isArray(savedLog) ? savedLog : []), entry].slice(-LOG_LIMIT)
   await $.store.set('log', log)
   dayStats = statsFor(log, day)
+  await bump($)
 
   // Files beside the lessons, for the daily lesson job
   await $.fs.write(base + '/practice-log.json', JSON.stringify(log, null, 2) + '\n')
@@ -399,6 +464,21 @@ export function register(on) {
       argumentHint: '[lesson]',
       immediate: true,
     })
+    // Keep in step with the other sessions, and with the lesson files now and then
+    let ticks = 0
+    let isSyncing = false
+    $.clock.every(SYNC_MS, async () => {
+      if (isSyncing) return
+      isSyncing = true
+      ticks++
+      try {
+        await sync($, { files: ticks % (FILES_MS / SYNC_MS) === 0 })
+      } catch (error) {
+        $.ui.log('could not sync: ' + error.message)
+      } finally {
+        isSyncing = false
+      }
+    })
     return next(e)
   })
 
@@ -407,7 +487,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId || e.reason !== 'answer') return result
-    await ensureFresh($)
+    await sync($, { files: true })
     if (!card || (card.result && !card.result.isPending)) {
       pickNext(await $.clock.now())
       $.ui.invalidate('ui.render')
@@ -416,7 +496,7 @@ export function register(on) {
   })
 
   on('command.run', { command: 'tr' }, async ($, e) => {
-    await ensureFresh($)
+    await sync($, { files: true })
     tab = e.args.trim() === 'lesson' ? 'lesson' : 'practice'
     await openPane($)
     await paneShown($)
@@ -455,6 +535,7 @@ export function register(on) {
       isBandCollapsed = value
       redraw()
       await $.store.set('bandCollapsed', value)
+      await bump($)
     }
     // Typed cards that are due: they wait for the pane
     const typedDue = items.filter((it) => srs[it.id] && srs[it.id].due <= now && !fitsBand(it, srs[it.id].stage)).length
@@ -522,7 +603,7 @@ export function register(on) {
                     ? []
                     : [
                         icon('tr-skip', '⏭ Skip', async () => {
-                          skipped.add(card.item.id)
+                          await skipItem($, card.item.id)
                           pickNext(await $.clock.now())
                           redraw()
                         }),

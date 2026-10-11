@@ -6,7 +6,7 @@ It draws in the Desktop app only. In a terminal session it loads, but it draws n
 
 ## What it shows
 
-- **The band above the prompt** shows the card that is due, but only a card that takes one press: a new word, or an A to D choice. A translate card needs typing, so it waits for the pane, and the band shows how many wait. An answered card makes room for the next one when Claude's next answer ends, or at once on **→ Next**. An unanswered card stays, so no card goes by unseen. **⏭ Skip** skips a card for this session, **▾ Hide** folds the band to one line with the card type, **▴ Show** unfolds it, and **⤢ Open** opens the pane. The band stays folded or unfolded across sessions until the next press.
+- **The band above the prompt** shows the card that is due, but only a card that takes one press: a new word, or an A to D choice. A translate card needs typing, so it waits for the pane, and the band shows how many wait. An answered card makes room for the next one when Claude's next answer ends, or at once on **→ Next**. An unanswered card stays, so no card goes by unseen. **⏭ Skip** skips a card for the rest of the day, **▾ Hide** folds the band to one line with the card type, **▴ Show** unfolds it, and **⤢ Open** opens the pane. The band stays folded or unfolded across sessions until the next press.
 - **`/tr`** opens a pane with two tabs. **Practice** shows card after card, translate cards included, with today's progress ring and counts. When the pane closes, a translate card with no answer goes back to wait. **Lesson** shows today's lesson, with the answers hidden until a press, and `/tr lesson` opens the pane at that tab.
 
 ## The cards
@@ -24,7 +24,9 @@ A sentence gets no "What does it mean?" card, because with whole sentences as op
 
 A right answer moves the item to the next card type, which comes back 10 minutes later. At the translate card, a right answer moves it to the next interval instead: 1, 3, 7, 21, then 60 days. A wrong answer moves it one card type back and brings it back in 3 minutes. Translate answers are graded word by word: missing Turkish letters (`karanlik` for `karanlık`) still count as right, and a different sentence asks me whether mine is right too, because Turkish word order is free.
 
-The next card is the item that has been due longest. When nothing is due, a new item comes, at most 5 a day, only from the lessons and cards of the last 7 days: newest day first, in the order of its cards file.
+The next card is the item that has been due longest. When nothing is due, a new item comes, at most 20 a day, only from the lessons and cards of the last 7 days: newest day first, in the order of its cards file.
+
+Every session shows the same card. The progress, today's counts, the skipped cards, and the folded band live in the mod's store, which all sessions share. A session looks at the store every 3 seconds, so an answer in one session moves the others on to the same next card. The options of a choice card come in the same order everywhere. A card you answered stays until **→ Next** or Claude's next answer, even when another session moves on. A session also reads the lesson files again every minute, so a lesson the job writes while sessions run reaches all of them.
 
 ## Data
 
@@ -32,20 +34,20 @@ The learning data stays in `~/.claude/turkish`, outside this repository:
 
 | File | Written by | What it holds |
 | --- | --- | --- |
-| `lessons/<date>.md` | the daily lesson job | The lesson. Its examples, contrast pair, drill with answers, and sentence of the day become sentence items. Their wrong meanings come from other sentences of the same lesson. |
-| `cards/<date>.json` | the daily lesson job | Words and sentences with checked wrong meanings and cloze gaps. A cards item replaces a lesson item with the same Turkish. |
+| `lessons/<date>.md` | the daily lesson job | The lesson. Its examples, contrast pair, drill with answers, and sentence of the day become sentence items. Two of them that differ in one word give each other a gap card. |
+| `cards/<date>.json` | the daily lesson job | Words with checked wrong meanings, and sentences with whole-word gap cards. A cards item replaces a lesson item with the same Turkish. |
 | `practice-log.json` | this mod | Every answer: the item, the card type, what I gave, what was expected, and whether it was right |
 | `practice-state.json` | this mod | Where each item stands: card type, interval, and wrong answers so far |
 
-The lesson job reads the last two files to choose between a new lesson and a repeat, and to find my weak points. `DAILY-LESSON-PROMPT.md` in the data folder is the authority on the cards file format. In short:
+The lesson job reads the last two files to choose between a new lesson and a focus lesson on my mistakes, and to drop what I know already. Its prompts are in [`lesson-job/`](lesson-job/), and `lesson-job/DAILY-LESSON-PROMPT.md` is the authority on the cards file format. In short:
 
 ```json
 {
   "point": "4. Ability and inability",
   "items": [
-    { "kind": "word", "tr": "kira", "en": "rent", "example": { "tr": "Bu ay kirayı ödeyemem.", "en": "I can't pay the rent this month." }, "distractors": ["bill", "salary", "price"] },
-    { "kind": "sentence", "tr": "Bu çayı içemem.", "en": "I can't drink this tea.", "distractors": ["I don't drink this tea.", "I can drink this tea.", "I didn't drink this tea."],
-      "cloze": { "text": "Bu çayı iç___.", "hint": "The tea is too hot.", "options": ["emem", "mem", "ebilirim", "medim"], "answer": "emem", "explain": "`iç-eme-m`: a limit." } }
+    { "kind": "word", "tr": "kira", "en": "rent", "example": { "tr": "Bu ay kirayı ödeyemem.", "en": "I can't pay the rent this month." }, "distractors": ["cherry", "rule", "bill"] },
+    { "kind": "sentence", "tr": "Bu çayı içemem.", "en": "I can't drink this tea.",
+      "cloze": { "text": "Bu çayı ___.", "hint": "The tea is too hot.", "options": ["içemem", "içmem", "içebilirim", "içmiyorum"], "answer": "içemem", "explain": "`iç-eme-m`: a limit." } }
   ]
 }
 ```
@@ -78,6 +80,7 @@ In `~/.claude/settings.json`:
 | `hooks/lesson.js` | The lesson parser and the translation grading |
 | `hooks/svg.js` | The progress ring |
 | `tests/` | `claude plugin test` suites, with shared fixtures in `fixtures.ts` |
+| `lesson-job/` | The prompts of the daily lesson job, which writes the lessons and the cards |
 
 ## Test
 

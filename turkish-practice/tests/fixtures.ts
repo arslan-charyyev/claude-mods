@@ -1,4 +1,5 @@
 // Shared test data and stubs: one lesson, one cards file, and every mods API call the mod makes
+import { mock } from 'claude-code/testing'
 
 export const LESSON = `# 2026-10-02 — Repeat
 
@@ -59,13 +60,14 @@ const SITE = { plugin: 'turkish-practice', viewport: { columns: 100, rows: 30 } 
 export const BAND = { ...SITE, component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 90, scroll: { offset: 0, bodyRows: 12 }, view: {} } } as const
 export const PANE = { ...SITE, component: 'Pane', requestId: 'turkish-drill', props: { title: 'Türkçe', isFocused: true, bodyColumns: 90, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as const
 
-// Stub everything the mod reaches. `store` seeds the store; `clock.now` reads `time.now`,
-// so a test can move time on. Returns the store and the written files for checks.
-export function stubAll(on, { store = {}, cards = CARDS, time = { now: NOW } } = {}) {
+// Stub everything the mod reaches. `store` seeds the store; the clock is a mock that
+// starts at `now` and moves only when a test moves it. Returns the store, the
+// written files, and the clock.
+export function stubAll(on, { store = {}, cards = CARDS, now = NOW } = {}) {
   const saved = new Map<string, unknown>(Object.entries(store))
   const written = new Map<string, string>()
   on('env.get', () => ({ value: '/home/test' }))
-  on('clock.now', () => ({ value: time.now }))
+  const clock = mock.clock(on, { now })
   on('fs.exists', ($, e) => ({ value: e.path.endsWith('/cards') && cards !== null }))
   on('fs.list', ($, e) => ({
     value: e.path.endsWith('/cards')
@@ -89,7 +91,7 @@ export function stubAll(on, { store = {}, cards = CARDS, time = { now: NOW } } =
   on('ui.log', () => ({ value: undefined }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
-  return { saved, written, time }
+  return { saved, written, clock }
 }
 
 export const start = ($) => $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
