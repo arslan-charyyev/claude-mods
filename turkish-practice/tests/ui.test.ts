@@ -45,6 +45,8 @@ test('a cloze card: whole words as options; a wrong word comes back soon', async
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   // The cards file cuts the gap inside the word, but the card shows whole words
   expect(await ui.find({ type: 'Text', text: 'Bu çayı ＿＿＿.' })).toBeDefined()
+  // The translation comes first, then the hint
+  expect(await ui.find({ type: 'Text', text: "I can't drink this tea. · I can't drink this tea; it is too hot." })).toBeDefined()
   await choose(ui, 'içmem')
   expect(await ui.find({ type: 'Text', text: '✗ Bu çayı içemem.' })).toBeDefined()
   expect(saved.get('srs')[TEA]).toMatchObject({ stage: 'cloze', box: 0, due: NOW + RETRY_STEP, lapses: 1 })
@@ -55,6 +57,7 @@ test('a lesson sentence saved at the old meaning card shows its cloze from the c
   stubAll(on, { store: { srs: { 's:bu çayı içmem': due('recognize') } } })
   await start($)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // A lesson cloze has the translation as its hint, so the line shows it once
   expect(await ui.find({ type: 'Text', text: "I won't drink this tea." })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Bu çayı ＿＿＿.' })).toBeDefined()
   await choose(ui, 'içmem')

@@ -368,10 +368,9 @@ function cardView($, el, isLarge) {
 
   if (c.stage === 'cloze') {
     const z = it.cloze
-    const prompt = [
-      ...(z.hint ? [Text({ italic: true, dimColor: true, wrap: 'wrap', children: [z.hint] })] : []),
-      heading(gap.text),
-    ]
+    // The translation, then the hint; a lesson cloze has the translation as its hint
+    const context = [it.en, ...(z.hint && z.hint !== it.en ? [z.hint] : [])].join(' · ')
+    const prompt = [Text({ italic: true, dimColor: true, wrap: 'wrap', children: [context] }), heading(gap.text)]
     if (!r) return [...prompt, choices(z.answer, (option, isRight) => record($, c, isRight, gap.word(option), isRight ? 'right' : 'wrong'), gap.word)]
     return [
       ...prompt,
