@@ -15,7 +15,6 @@ const NEW_LOOKBACK = 7
 const LOG_LIMIT = 2000
 const RIGHT = '#3fa55a'
 const WRONG = '#e05252'
-const AMBER = '#c9962a'
 const LETTERS = ['A', 'B', 'C', 'D']
 
 let base = ''
@@ -269,7 +268,8 @@ function untilText(ms) {
 // The line above a typed answer's result: [is it good news, the text]
 const HEADLINES = {
   exact: [true, '✓ Doğru!'],
-  letters: [true, '≈ Right. Check the Turkish letters (ı ş ğ ç ö ü)'],
+  // Typed on an English keyboard (`aksam` for `akşam`): as right as an exact answer
+  letters: [true, '✓ Doğru!'],
   different: [false, '✗ Not quite. Compare the words'],
   skipped: [false, 'The answer'],
   variant: [true, '✓ Counted as right'],
@@ -427,8 +427,8 @@ function cardView($, el, isLarge) {
     flexWrap: 'wrap',
     columnGap: 1,
     children: r.words.map((w) =>
-      r.given && w.status !== 'ok'
-        ? Text({ bold: true, color: w.status === 'letters' ? AMBER : WRONG, children: [w.raw] })
+      r.given && w.status === 'missing'
+        ? Text({ bold: true, color: WRONG, children: [w.raw] })
         : Text({ bold: true, children: [w.raw] }),
     ),
   })

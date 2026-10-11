@@ -64,16 +64,16 @@ test('a lesson sentence saved at the old meaning card shows its cloze from the c
   expect(await ui.find({ type: 'Text', text: '✓ Doğru! Bu çayı içmem.' })).toBeDefined()
 })
 
-test('a translate card in the pane: missing Turkish letters still count as right', async ($, on) => {
+test('a translate card in the pane: missing Turkish letters count as right and are not flagged', async ($, on) => {
   const { saved } = stubAll(on, { store: { srs: { [ROOM]: due('produce') } } })
   await start($)
   await $.command.run({ command: 'tr', args: '' })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ key: 'tr-prompt' })).props.text).toBe("### The room is dark; I can't find my keys.")
   await ui.input({ key: 'tr-answer', text: 'oda karanlik anahtarlarimi bulamiyorum' })
-  expect(await ui.find({ type: 'Text', text: /^≈ Right/ })).toBeDefined()
-  // The answer once, as written, with the words that lack their letters in amber
-  expect(await ui.find({ type: 'Text', text: 'karanlık,' })).toMatchObject({ props: { color: '#c9962a' } })
+  expect(await ui.find({ type: 'Text', text: '✓ Doğru!' })).toBeDefined()
+  // The answer once, as written; a word that lacks only its letters is not flagged
+  expect((await ui.find({ type: 'Text', text: 'karanlık,' })).props.color).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'Oda' })).toMatchObject({ props: { bold: true } })
   expect(saved.get('srs')[ROOM]).toMatchObject({ stage: 'produce', box: 1, due: NOW + DAY })
   expect(await ui.find({ type: 'Text', text: '1 learning · 0 known' })).toBeUndefined()
